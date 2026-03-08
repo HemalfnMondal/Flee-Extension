@@ -148,12 +148,15 @@ function generateZip() {
 }
 
 /**
- * Returns a random 9-digit number string for the Social Security Number field.
+ * Returns a random Social Security Number formatted as XXX-XX-XXXX.
+ * Example: 384-52-9184
  * @returns {string}
  */
 function generateSSN() {
-  // Generate a random number between 100000000 and 999999999 (always 9 digits).
-  return String(Math.floor(Math.random() * 900000000) + 100000000);
+  const part1 = Math.floor(100 + Math.random() * 900);  // 100–999
+  const part2 = Math.floor(10  + Math.random() * 90);   // 10–99
+  const part3 = Math.floor(1000 + Math.random() * 9000); // 1000–9999
+  return `${part1}-${part2}-${part3}`;
 }
 
 // ─────────────────────────────────────────────
@@ -1175,13 +1178,17 @@ function autofillDomesticDemographics() {
     // ─────────────────────────────────────────────────────────────────────
 
     // Social Security Number
-    // Uses fillSSNField() which escalates through three strategies to handle
-    // both plain Salesforce text fields and masked input components.
-    (() => {
-      const keywords = ["social security", "ssn", "social security number"];
+    // Runs in its own delayed block (1200 ms) because Salesforce often renders
+    // this field after other fields.  Simulates focus → value → input/change/blur
+    // so the form detects the update correctly.
+    setTimeout(() => {
+      if (!window.location.href.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) return;
+
+      const keywords = ["social security", "ssn"];
       for (const el of document.querySelectorAll("input")) {
         const type = normalize(el.type);
         if (["submit", "button", "hidden", "checkbox", "radio", "file"].includes(type)) continue;
+
         const fingerprint = [
           getLabelText(el),
           normalize(el.placeholder),
@@ -1189,14 +1196,19 @@ function autofillDomesticDemographics() {
           normalize(el.id),
           getNearbyText(el),
         ].join(" ");
+
         if (keywords.some((kw) => fingerprint.includes(normalize(kw)))) {
-          fillInput(el, ssn);
+          el.focus();
+          el.value = ssn;
+          el.dispatchEvent(new Event("input",  { bubbles: true }));
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          el.dispatchEvent(new Event("blur",   { bubbles: true }));
           console.log(`[Flee Autofill] "Social Security Number" → "${ssn}"`);
           return;
         }
       }
       console.warn("[Flee Autofill] Could not find Social Security Number field.");
-    })();
+    }, 1200);
 
     // Country of Citizenship
     fillSelect("Country of Citizenship",
