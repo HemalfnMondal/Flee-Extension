@@ -1388,31 +1388,62 @@ function findElementDeep(selector, root) {
 }
 
 // ─────────────────────────────────────────────
-// Message listener (triggered by icon click)
+// Central autofill router
 // ─────────────────────────────────────────────
 
 /**
  * Routes to the correct autofill routine based on the current page URL.
+ * Called both by the extension icon click (message listener) and by the
+ * keyboard shortcut handler below.
  *
  * - pageId=Domestic_Educational_History → autofillDomesticEducationalHistory()
  * - pageId=Domestic_Demographics        → autofillDomesticDemographics()
  * - pageId=My_Profile                   → autofillMyProfile()
  * - pageId=Registration                 → autofill()
  */
+function runAutofill() {
+  const url = window.location.href;
+
+  if (url.includes(DOMESTIC_EDUCATIONAL_HISTORY_URL_FRAGMENT)) {
+    autofillDomesticEducationalHistory(); // async — Educational History form
+  } else if (url.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) {
+    autofillDomesticDemographics();       // async — Demographics form
+  } else if (url.includes(MY_PROFILE_URL_FRAGMENT)) {
+    autofillMyProfile();                  // async — My Profile dropdowns
+  } else {
+    autofill();                           // sync  — Registration form fields
+  }
+}
+
+// ─────────────────────────────────────────────
+// Message listener (triggered by icon click)
+// ─────────────────────────────────────────────
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.action === "runAutofill") {
-    const url = window.location.href;
-
-    if (url.includes(DOMESTIC_EDUCATIONAL_HISTORY_URL_FRAGMENT)) {
-      autofillDomesticEducationalHistory(); // async — Educational History form
-    } else if (url.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) {
-      autofillDomesticDemographics();       // async — Demographics form
-    } else if (url.includes(MY_PROFILE_URL_FRAGMENT)) {
-      autofillMyProfile();                  // async — My Profile dropdowns
-    } else {
-      autofill();                           // sync  — Registration form fields
-    }
-
+    runAutofill();
     sendResponse({ success: true });
   }
+});
+
+// ─────────────────────────────────────────────
+// Keyboard shortcut — press "0" to autofill
+// ─────────────────────────────────────────────
+
+/**
+ * Listens for the "0" key on any page where the extension is active.
+ * Skips the trigger when the user is typing inside an input or textarea
+ * to avoid interfering with form entry.
+ */
+document.addEventListener("keydown", function (event) {
+  if (event.key !== "0") return;
+
+  // Do not fire while the user is actively typing in a form field.
+  const tag = event.target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || event.target.isContentEditable) {
+    return;
+  }
+
+  console.log("[Flee Autofill] Keyboard shortcut '0' pressed — running autofill…");
+  runAutofill();
 });
