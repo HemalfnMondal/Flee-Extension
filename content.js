@@ -20,6 +20,13 @@ const TARGET_URL =
 /** Password used for both the "Create Password" and "Password Confirm" fields. */
 const FIXED_PASSWORD = "Neela63352..";
 
+/**
+ * URL fragment that identifies the My Profile page.
+ * Matched with String.prototype.includes() so variations in the base path
+ * (e.g. with or without /apex/) are all handled correctly.
+ */
+const MY_PROFILE_URL_FRAGMENT = "pageId=My_Profile";
+
 // ─────────────────────────────────────────────
 // Random data generators
 // ─────────────────────────────────────────────
@@ -285,6 +292,53 @@ function fillLocationDropdown() {
       observer.observe(document.body, { childList: true, subtree: true });
     }, INITIAL_DELAY);
   });
+}
+
+/**
+ * General-purpose helper: scans all <select> elements, matches one using a
+ * list of label keywords, then selects the option whose visible text includes
+ * the target string.
+ *
+ * Label matching tests (all normalised to lowercase):
+ *   - resolved <label> text via getLabelText()
+ *   - surrounding parent text via getNearbyText()
+ *   - the element's name attribute
+ *   - the element's id attribute
+ *
+ * @param {string[]} labelKeywords  One or more lowercase substrings to match.
+ * @param {string}   optionText     Partial text of the option to select.
+ * @returns {boolean} true if the option was found and selected.
+ */
+function tryFillSelect(labelKeywords, optionText) {
+  const targetOption = normalize(optionText);
+
+  for (const select of document.querySelectorAll("select")) {
+    // Build a single normalised fingerprint for this select element.
+    const fingerprint = [
+      getLabelText(select),
+      getNearbyText(select),
+      normalize(select.name),
+      normalize(select.id),
+    ].join(" ");
+
+    // At least one keyword must match.
+    const matched = labelKeywords.some((kw) =>
+      fingerprint.includes(normalize(kw))
+    );
+    if (!matched) continue;
+
+    // Walk the option list and pick the first text match.
+    for (const option of select.options) {
+      if (normalize(option.textContent).includes(targetOption)) {
+        select.value = option.value;
+        // Salesforce Lightning / Aura needs both input + change to react.
+        select.dispatchEvent(new Event("input",  { bubbles: true }));
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**
@@ -579,19 +633,168 @@ function autofill() {
   console.log("[Flee Autofill] Autofill complete (dropdown fill running in background).");
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// My Profile page autofill  (pageId=My_Profile)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Descriptor for a single dropdown field on the My Profile page.
+ * @typedef  {Object} DropdownField
+ * @property {string}   name          Human-readable name used in log messages.
+ * @property {string[]} labelKeywords Lowercase substrings that identify the <select>.
+ * @property {string}   optionText    Partial text of the option to select.
+ */
+
+/**
+ * All dropdown fields that must be filled on the My Profile page, in order.
+ * @type {DropdownField[]}
+ */
+const MY_PROFILE_FIELDS = [
+  {
+    name: "Military Service",
+    // Match the long question text about US Armed Forces / National Guard.
+    labelKeywords: ["armed forces", "national guard", "served in the united states", "military"],
+    optionText: "No",
+  },
+  {
+    name: "Citizenship Status",
+    labelKeywords: ["citizenship"],
+    optionText: "US Citizen",
+  },
+  {
+    name: "Student Type",
+    labelKeywords: ["student type", "type of student"],
+    optionText: "Undergraduate",
+  },
+  {
+    name: "Location",
+    labelKeywords: ["location"],
+    optionText: "Online & Campus Centers",
+  },
+  {
+    name: "Program Type",
+    labelKeywords: ["program type", "type of program"],
+    optionText: "Certificate",
+  },
+  {
+    name: "Program",
+    // Keep keywords specific enough to avoid matching "Program Type".
+    labelKeywords: ["program name", "select program", "choose program", "program"],
+    optionText: "Certificate in Personal Financial Planning",
+  },
+  {
+    name: "Start Term",
+    labelKeywords: ["start term", "term", "start date", "when will you", "semester"],
+    optionText: "Fall 2026",
+  },
+];
+
+/**
+ * Fills all My Profile dropdowns defined in MY_PROFILE_FIELDS.
+ *
+ * Strategy (mirrors fillLocationDropdown):
+ *  1. Wait INITIAL_DELAY ms for Salesforce to finish rendering.
+ *  2. Attempt to fill every pending field.
+ *  3. Use a MutationObserver for any fields whose options aren't ready yet,
+ *     retrying on each DOM mutation until MAX_WAIT_MS has elapsed.
+ */
+function autofillMyProfile() {
+  // ── URL guard ────────────────────────────────────────────────────────────
+  if (!window.location.href.includes(MY_PROFILE_URL_FRAGMENT)) {
+    console.warn(
+      "[Flee Autofill] URL does not include '" + MY_PROFILE_URL_FRAGMENT +
+      "'. My Profile autofill skipped."
+    );
+    return;
+  }
+
+  console.log("[Flee Autofill] My Profile page detected — starting dropdown fill…");
+
+  const INITIAL_DELAY = 1000;   // ms to wait before first attempt
+  const MAX_WAIT_MS   = 8000;   // total ms before giving up
+
+  setTimeout(() => {
+    // Track which field indices still need to be resolved.
+    const pending = new Set(MY_PROFILE_FIELDS.map((_, i) => i));
+
+    /**
+     * Attempts to fill every pending dropdown.
+     * Removes successfully filled indices from `pending`.
+     * @returns {boolean} true when all fields have been filled.
+     */
+    function tryFillAll() {
+      for (const i of [...pending]) {
+        const field = MY_PROFILE_FIELDS[i];
+        if (tryFillSelect(field.labelKeywords, field.optionText)) {
+          console.log(
+            `[Flee Autofill] "${field.name}" → "${field.optionText}"`
+          );
+          pending.delete(i);
+        }
+      }
+      return pending.size === 0;
+    }
+
+    // ── First attempt after initial delay ────────────────────────────────
+    if (tryFillAll()) {
+      console.log("[Flee Autofill] All My Profile dropdowns filled.");
+      return;
+    }
+
+    // ── MutationObserver fallback for remaining fields ────────────────────
+    const remaining = [...pending].map((i) => MY_PROFILE_FIELDS[i].name);
+    console.log(
+      "[Flee Autofill] Waiting for DOM updates to fill:",
+      remaining.join(", ")
+    );
+
+    const deadline = Date.now() + (MAX_WAIT_MS - INITIAL_DELAY);
+
+    const observer = new MutationObserver(() => {
+      if (Date.now() > deadline) {
+        observer.disconnect();
+        const stillPending = [...pending].map((i) => MY_PROFILE_FIELDS[i].name);
+        console.error(
+          "[Flee Autofill] Timed out. Could not fill:",
+          stillPending.join(", ")
+        );
+        return;
+      }
+
+      if (tryFillAll()) {
+        observer.disconnect();
+        console.log("[Flee Autofill] All My Profile dropdowns filled.");
+      }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+  }, INITIAL_DELAY);
+}
+
 // ─────────────────────────────────────────────
 // Message listener (triggered by icon click)
 // ─────────────────────────────────────────────
 
 /**
- * The background service worker sends { action: "runAutofill" } when
- * the user clicks the extension icon.
- * autofill() is synchronous; fillLocationDropdown() runs as a background
- * Promise, so we can respond to the caller immediately.
+ * Routes to the correct autofill routine based on the current page URL.
+ *
+ * - pageId=My_Profile  → autofillMyProfile() — fills only the 7 dropdowns
+ * - pageId=Registration → autofill()          — fills the User Details form
+ *
+ * autofill() is synchronous (location dropdown runs as a background Promise),
+ * while autofillMyProfile() is entirely async, so sendResponse is always
+ * called immediately.
  */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.action === "runAutofill") {
-    autofill();            // sync fields filled immediately
+    const url = window.location.href;
+
+    if (url.includes(MY_PROFILE_URL_FRAGMENT)) {
+      autofillMyProfile();    // async — My Profile dropdowns
+    } else {
+      autofill();             // sync — Registration form fields
+    }
+
     sendResponse({ success: true });
   }
 });
