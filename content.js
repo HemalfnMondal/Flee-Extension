@@ -148,25 +148,12 @@ function generateZip() {
 }
 
 /**
- * Returns a random Social Security Number in the format XXX-XX-XXXX.
- * Note: area numbers 000 and 666 are avoided; group/serial numbers avoid 0000/00.
+ * Returns a random 9-digit number string for the Social Security Number field.
  * @returns {string}
  */
 function generateSSN() {
-  // Area: 001–899, excluding 666
-  let area;
-  do {
-    area = Math.floor(Math.random() * 899) + 1;
-  } while (area === 666);
-
-  const group  = Math.floor(Math.random() * 99) + 1;  // 01–99
-  const serial = Math.floor(Math.random() * 9999) + 1; // 0001–9999
-
-  return [
-    String(area).padStart(3, "0"),
-    String(group).padStart(2, "0"),
-    String(serial).padStart(4, "0"),
-  ].join("-");
+  // Generate a random number between 100000000 and 999999999 (always 9 digits).
+  return String(Math.floor(Math.random() * 900000000) + 100000000);
 }
 
 // ─────────────────────────────────────────────
@@ -1203,7 +1190,7 @@ function autofillDomesticDemographics() {
           getNearbyText(el),
         ].join(" ");
         if (keywords.some((kw) => fingerprint.includes(normalize(kw)))) {
-          fillSSNField(el, ssn);
+          fillInput(el, ssn);
           console.log(`[Flee Autofill] "Social Security Number" → "${ssn}"`);
           return;
         }
