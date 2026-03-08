@@ -33,6 +33,11 @@ const MY_PROFILE_URL_FRAGMENT = "pageId=My_Profile";
  */
 const DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT = "pageId=Domestic_Demographics";
 
+/**
+ * URL fragment that identifies the Domestic Educational History page.
+ */
+const DOMESTIC_EDUCATIONAL_HISTORY_URL_FRAGMENT = "pageId=Domestic_Educational_History";
+
 // ─────────────────────────────────────────────
 // Random data generators
 // ─────────────────────────────────────────────
@@ -1187,6 +1192,165 @@ function autofillDomesticDemographics() {
   })();
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Domestic Educational History page  (pageId=Domestic_Educational_History)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Autofills the Domestic Educational History form.
+ *
+ * Fields filled:
+ *   1. High School / Home School CEEB Code  → type "te", click first suggestion
+ *   2. Did you graduate?                    → "Yes"
+ *   3. Graduation Date                      → "08/12/2025"
+ *   4. College classes prior to HS grad?    → "No"
+ *   5. College classes after  HS grad?      → "No"
+ */
+async function autofillDomesticEducationalHistory() {
+  // ── URL guard ────────────────────────────────────────────────────────────
+  if (!window.location.href.includes(DOMESTIC_EDUCATIONAL_HISTORY_URL_FRAGMENT)) {
+    console.warn(
+      "[Flee Autofill] URL does not include '" +
+        DOMESTIC_EDUCATIONAL_HISTORY_URL_FRAGMENT +
+        "'. Educational History autofill skipped."
+    );
+    return;
+  }
+
+  console.log("[Flee Autofill] Educational History page detected — waiting 1000 ms…");
+
+  // Wait for Salesforce to finish its initial render.
+  await new Promise((r) => setTimeout(r, 1000));
+
+  // ──────────────────────────────────────────────────────────────
+  // Field 1 — High School / Home School CEEB Code (autocomplete lookup)
+  // ──────────────────────────────────────────────────────────────
+  const ceebKeywords = ["ceeb", "high school code", "home school code", "school code", "high school"];
+  const ceebInput   = findInputDeep(ceebKeywords);
+
+  if (ceebInput) {
+    ceebInput.focus();
+    ceebInput.value = "te";
+    ceebInput.dispatchEvent(new Event("input",  { bubbles: true }));
+    ceebInput.dispatchEvent(new Event("change", { bubbles: true }));
+    console.log("[Flee Autofill] CEEB Code: typed \"te\", waiting for suggestions…");
+
+    // Wait for the autocomplete dropdown to render.
+    await new Promise((r) => setTimeout(r, 800));
+
+    // Try common Salesforce / Lightning autocomplete selector patterns.
+    const suggestionSelectors = [
+      "[role='option']",
+      "[role='listbox'] li",
+      ".slds-listbox__item",
+      ".autocomplete-item",
+      ".lookup__item",
+      "lightning-base-combobox-item",
+    ];
+
+    let clicked = false;
+    for (const selector of suggestionSelectors) {
+      const first = document.querySelector(selector);
+      if (first) {
+        first.click();
+        console.log(`[Flee Autofill] CEEB Code: clicked first suggestion ("${first.textContent.trim().slice(0, 60)}…")`);
+        clicked = true;
+        break;
+      }
+      // Also search inside shadow roots.
+      const deepFirst = findElementDeep(selector);
+      if (deepFirst) {
+        deepFirst.click();
+        console.log(`[Flee Autofill] CEEB Code: clicked first shadow suggestion`);
+        clicked = true;
+        break;
+      }
+    }
+    if (!clicked) {
+      console.warn("[Flee Autofill] CEEB Code: no suggestion item found after typing \"te\".");
+    }
+  } else {
+    console.warn("[Flee Autofill] CEEB Code input not found.");
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Field 2 — Did you graduate?  → "Yes"
+  // ──────────────────────────────────────────────────────────────
+  const graduateOk = tryFillSelect(["did you graduate", "graduate"], "Yes");
+  if (graduateOk) {
+    console.log("[Flee Autofill] \"Did you graduate?\" → \"Yes\"");
+  } else {
+    console.warn("[Flee Autofill] Could not fill \"Did you graduate?\"");
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Field 3 — Graduation Date  → "08/12/2025"
+  // ──────────────────────────────────────────────────────────────
+  const gradDateKeywords = ["graduation date", "grad date", "date of graduation", "graduation"];
+  const gradDateInput    = findInputDeep(gradDateKeywords);
+  if (gradDateInput) {
+    gradDateInput.value = "08/12/2025";
+    gradDateInput.dispatchEvent(new Event("input",  { bubbles: true }));
+    gradDateInput.dispatchEvent(new Event("change", { bubbles: true }));
+    console.log("[Flee Autofill] \"Graduation Date\" → \"08/12/2025\"");
+  } else {
+    console.warn("[Flee Autofill] Could not find \"Graduation Date\" field.");
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Field 4 — College classes PRIOR to graduating  → "No"
+  // ──────────────────────────────────────────────────────────────
+  const priorOk = tryFillSelect(
+    ["college classes prior", "prior to graduating", "classes prior to"],
+    "No"
+  );
+  if (priorOk) {
+    console.log("[Flee Autofill] \"College classes prior to graduating\" → \"No\"");
+  } else {
+    console.warn("[Flee Autofill] Could not fill \"College classes prior to graduating\".");
+  }
+
+  // ──────────────────────────────────────────────────────────────
+  // Field 5 — College classes AFTER graduating  → "No"
+  // ──────────────────────────────────────────────────────────────
+  const afterOk = tryFillSelect(
+    ["college classes after", "after graduating", "classes after"],
+    "No"
+  );
+  if (afterOk) {
+    console.log("[Flee Autofill] \"College classes after graduating\" → \"No\"");
+  } else {
+    console.warn("[Flee Autofill] Could not fill \"College classes after graduating\".");
+  }
+
+  console.log("[Flee Autofill] Educational History fill complete.");
+}
+
+/**
+ * Shadow-DOM-aware querySelector.
+ * Walks the entire element tree including shadow roots and returns the first
+ * element that matches `selector`.
+ *
+ * @param {string} selector  CSS selector to match.
+ * @param {Node}   [root]    Start node (defaults to document.body).
+ * @returns {Element|null}
+ */
+function findElementDeep(selector, root) {
+  root = root || document.body;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.shadowRoot) {
+      const found = findElementDeep(selector, node.shadowRoot);
+      if (found) return found;
+    }
+    try {
+      if (node.matches(selector)) return node;
+    } catch (_) { /* invalid selector for this element type */ }
+  }
+  return null;
+}
+
 // ─────────────────────────────────────────────
 // Message listener (triggered by icon click)
 // ─────────────────────────────────────────────
@@ -1194,20 +1358,23 @@ function autofillDomesticDemographics() {
 /**
  * Routes to the correct autofill routine based on the current page URL.
  *
- * - pageId=Domestic_Demographics → autofillDomesticDemographics()
- * - pageId=My_Profile            → autofillMyProfile()
- * - pageId=Registration          → autofill()
+ * - pageId=Domestic_Educational_History → autofillDomesticEducationalHistory()
+ * - pageId=Domestic_Demographics        → autofillDomesticDemographics()
+ * - pageId=My_Profile                   → autofillMyProfile()
+ * - pageId=Registration                 → autofill()
  */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.action === "runAutofill") {
     const url = window.location.href;
 
-    if (url.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) {
-      autofillDomesticDemographics(); // async — Demographics form
+    if (url.includes(DOMESTIC_EDUCATIONAL_HISTORY_URL_FRAGMENT)) {
+      autofillDomesticEducationalHistory(); // async — Educational History form
+    } else if (url.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) {
+      autofillDomesticDemographics();       // async — Demographics form
     } else if (url.includes(MY_PROFILE_URL_FRAGMENT)) {
-      autofillMyProfile();            // async — My Profile dropdowns
+      autofillMyProfile();                  // async — My Profile dropdowns
     } else {
-      autofill();                     // sync  — Registration form fields
+      autofill();                           // sync  — Registration form fields
     }
 
     sendResponse({ success: true });
