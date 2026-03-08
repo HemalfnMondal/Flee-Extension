@@ -1299,29 +1299,65 @@ async function autofillDomesticEducationalHistory() {
 
   // ──────────────────────────────────────────────────────────────
   // Field 4 — College classes PRIOR to graduating  → "No"
+  // Loops through options explicitly and dispatches a change event
+  // so Salesforce registers the selection.
   // ──────────────────────────────────────────────────────────────
-  const priorOk = tryFillSelect(
-    ["college classes prior", "prior to graduating", "classes prior to"],
-    "No"
-  );
-  if (priorOk) {
-    console.log("[Flee Autofill] \"College classes prior to graduating\" → \"No\"");
-  } else {
-    console.warn("[Flee Autofill] Could not fill \"College classes prior to graduating\".");
-  }
+  (() => {
+    const priorKeywords = ["prior to graduating", "college classes prior", "classes prior to", "prior to grad"];
+    for (const select of document.querySelectorAll("select")) {
+      const fingerprint = [
+        getLabelText(select),
+        getNearbyText(select),
+        normalize(select.name),
+        normalize(select.id),
+      ].join(" ");
+      if (!priorKeywords.some((kw) => fingerprint.includes(normalize(kw)))) continue;
+
+      for (const option of select.options) {
+        if (normalize(option.textContent).includes("no")) {
+          select.value = option.value;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          console.log("[Flee Autofill] \"College classes prior to graduating\" → \"No\"");
+          return;
+        }
+      }
+      console.warn("[Flee Autofill] Could not find \"No\" option in prior-classes dropdown.");
+      return;
+    }
+    console.warn("[Flee Autofill] Could not find \"College classes prior to graduating\" dropdown.");
+  })();
+
+  // Wait 1000 ms between the two college-classes dropdowns so Salesforce has
+  // time to process the first selection before the second is set.
+  await new Promise((resolve) => setTimeout(resolve, 1000));
 
   // ──────────────────────────────────────────────────────────────
   // Field 5 — College classes AFTER graduating  → "No"
   // ──────────────────────────────────────────────────────────────
-  const afterOk = tryFillSelect(
-    ["college classes after", "after graduating", "classes after"],
-    "No"
-  );
-  if (afterOk) {
-    console.log("[Flee Autofill] \"College classes after graduating\" → \"No\"");
-  } else {
-    console.warn("[Flee Autofill] Could not fill \"College classes after graduating\".");
-  }
+  (() => {
+    const afterKeywords = ["after graduating", "college classes after", "classes after", "after grad"];
+    for (const select of document.querySelectorAll("select")) {
+      const fingerprint = [
+        getLabelText(select),
+        getNearbyText(select),
+        normalize(select.name),
+        normalize(select.id),
+      ].join(" ");
+      if (!afterKeywords.some((kw) => fingerprint.includes(normalize(kw)))) continue;
+
+      for (const option of select.options) {
+        if (normalize(option.textContent).includes("no")) {
+          select.value = option.value;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+          console.log("[Flee Autofill] \"College classes after graduating\" → \"No\"");
+          return;
+        }
+      }
+      console.warn("[Flee Autofill] Could not find \"No\" option in after-classes dropdown.");
+      return;
+    }
+    console.warn("[Flee Autofill] Could not find \"College classes after graduating\" dropdown.");
+  })();
 
   console.log("[Flee Autofill] Educational History fill complete.");
 }
