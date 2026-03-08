@@ -412,9 +412,12 @@ function tryFillSelect(labelKeywords, optionText) {
     );
     if (!matched) continue;
 
-    // Walk the option list and pick the first text match.
+    // Walk the option list — match on visible TEXT or on the VALUE attribute.
+    // Checking value is critical for state abbreviations (e.g. value="TX").
     for (const option of select.options) {
-      if (normalize(option.textContent).includes(targetOption)) {
+      const text  = normalize(option.textContent);
+      const value = normalize(option.value);
+      if (text.includes(targetOption) || value.includes(targetOption)) {
         select.value = option.value;
         // Salesforce Lightning / Aura needs both input + change to react.
         select.dispatchEvent(new Event("input",  { bubbles: true }));
@@ -424,6 +427,70 @@ function tryFillSelect(labelKeywords, optionText) {
     }
   }
   return false;
+}
+
+/**
+ * Simulates character-by-character keyboard input into a field.
+ *
+ * Plain value assignment (input.value = ...) is silently ignored by Salesforce
+ * masked / formatted inputs (e.g. SSN, phone).  This function mimics what a
+ * real user would do — focusing the field, clearing it, then "typing" every
+ * character one at a time — which the masking layer does respond to.
+ *
+ * Strategy (most-to-least compatible):
+ *   1. Focus + select-all + execCommand('insertText') — works in most Chromium
+ *      based browsers for masked inputs.
+ *   2. Character-by-character InputEvent simulation as a reliable fallback.
+ *   3. Final guard: native setter + events in case neither path worked.
+ *
+ * @param {HTMLInputElement} input
+ * @param {string}           value
+ */
+function typeIntoInput(input, value) {
+  input.focus();
+
+  // Clear any existing content.
+  const nativeSetter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype, "value"
+  )?.set;
+  if (nativeSetter) nativeSetter.call(input, "");
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+
+  // ── Strategy 1: execCommand (works for masked inputs in Chrome) ────────
+  if (document.execCommand) {
+    input.select();
+    const inserted = document.execCommand("insertText", false, value);
+    if (inserted && input.value === value) {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.blur();
+      return;
+    }
+  }
+
+  // ── Strategy 2: character-by-character InputEvent simulation ──────────
+  for (const char of value) {
+    // keydown
+    input.dispatchEvent(new KeyboardEvent("keydown", {
+      key: char, bubbles: true, cancelable: true,
+    }));
+    // beforeinput
+    input.dispatchEvent(new InputEvent("beforeinput", {
+      inputType: "insertText", data: char, bubbles: true, cancelable: true,
+    }));
+    // Append the character using the native setter so masking logic applies.
+    if (nativeSetter) nativeSetter.call(input, input.value + char);
+    // input
+    input.dispatchEvent(new InputEvent("input", {
+      inputType: "insertText", data: char, bubbles: true,
+    }));
+    // keyup
+    input.dispatchEvent(new KeyboardEvent("keyup", {
+      key: char, bubbles: true,
+    }));
+  }
+
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  input.blur();
 }
 
 /**
@@ -1001,10 +1068,21 @@ function autofillDomesticDemographics() {
     fillText("City", ["city"], city);
 
     // State / Province
-    fillText("State/Province",
+    // On Salesforce, State becomes a <select> picklist once Country is set.
+    // Try select first (matching by option text OR value/abbreviation),
+    // then fall back to a text input for non-Salesforce renderings.
+    const stateFilledAsSelect = tryFillSelect(
       ["state", "province", "state/province", "state / province"],
-      state
+      state  // abbreviation is matched against option.value (e.g. value="TX")
     );
+    if (!stateFilledAsSelect) {
+      fillText("State/Province",
+        ["state", "province", "state/province", "state / province"],
+        state
+      );
+    } else {
+      console.log(`[Flee Autofill] "State/Province" → "${state}"`);
+    }
 
     // Zip / Postal Code
     fillText("Zip Code",
@@ -1023,10 +1101,28 @@ function autofillDomesticDemographics() {
     // ─────────────────────────────────────────────────────────────────────
 
     // Social Security Number
-    fillText("Social Security Number",
-      ["social security", "ssn", "social security number"],
-      ssn
-    );
+    // Salesforce SSN fields use input masking — plain value assignment is
+    // ignored.  typeIntoInput() simulates real keystroke events instead.
+    (() => {
+      const keywords = ["social security", "ssn", "social security number"];
+      for (const el of document.querySelectorAll("input")) {
+        const type = normalize(el.type);
+        if (["submit", "button", "hidden", "checkbox", "radio", "file"].includes(type)) continue;
+        const fingerprint = [
+          getLabelText(el),
+          normalize(el.placeholder),
+          normalize(el.name),
+          normalize(el.id),
+          getNearbyText(el),
+        ].join(" ");
+        if (keywords.some((kw) => fingerprint.includes(normalize(kw)))) {
+          typeIntoInput(el, ssn);
+          console.log(`[Flee Autofill] "Social Security Number" → "${ssn}"`);
+          return;
+        }
+      }
+      console.warn("[Flee Autofill] Could not find Social Security Number field.");
+    })();
 
     // Country of Citizenship
     fillSelect("Country of Citizenship",
