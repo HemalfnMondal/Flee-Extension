@@ -180,10 +180,16 @@ These are Salesforce Lightning-specific limitations and require deeper investiga
 
 ```
 Flee-Extention/
-├── manifest.json      # Chrome Extension Manifest V3 configuration
-├── background.js      # Service worker — listens for icon click, sends message to content script
-├── content.js         # Main content script — all autofill logic
-└── README.md          # This file
+├── manifest.json         # Chrome Extension Manifest V3 configuration
+├── background.js         # Service worker — listens for icon click, sends message to content script
+├── content.js            # Main content script — all autofill logic
+├── generate_icons.py     # Python script that generates the butterfly icon PNGs
+├── icons/
+│   ├── icon16.png        # Toolbar icon (16×16)
+│   ├── icon32.png        # Toolbar icon (32×32)
+│   ├── icon48.png        # Extension management page icon (48×48)
+│   └── icon128.png       # Chrome Web Store icon (128×128)
+└── README.md             # This file
 ```
 
 ### File Responsibilities
