@@ -446,46 +446,133 @@ function tryFillSelect(labelKeywords, optionText) {
  * @param {HTMLInputElement} input
  * @param {string}           value
  */
-function typeIntoInput(input, value) {
-  input.focus();
-
-  // Clear any existing content.
+/**
+ * Fills a Salesforce SSN (or any masked text) input reliably.
+ *
+ * Salesforce masked inputs ignore plain `input.value = ...` assignment because
+ * the masking layer monitors keyboard / clipboard events, not the raw property.
+ * This function escalates through three strategies until the field has a value:
+ *
+ *  Strategy 1 — Direct native setter + events
+ *    Works when Salesforce renders SSN as a plain, unmasked text field.
+ *
+ *  Strategy 2 — Clipboard paste simulation
+ *    Many masked inputs have a dedicated `paste` event handler that accepts
+ *    plain text and applies formatting.  We create a real DataTransfer object
+ *    and fire a ClipboardEvent with it.
+ *
+ *  Strategy 3 — Digits-only character typing
+ *    The masking library listens to `beforeinput` / `input` events fired
+ *    BEFORE the DOM value is modified.  We fire those events first, then nudge
+ *    the native value by one character if the mask did not do so itself.
+ *    We send only the 9 raw digits (no hyphens) because the mask inserts
+ *    the hyphens itself to produce "XXX-XX-XXXX".
+ *
+ * @param {HTMLInputElement} input  The SSN input element.
+ * @param {string}           ssn    Formatted SSN string, e.g. "384-52-9184".
+ */
+function fillSSNField(input, ssn) {
   const nativeSetter = Object.getOwnPropertyDescriptor(
     HTMLInputElement.prototype, "value"
   )?.set;
+
+  /** Fire input+change so any framework listener sees the new value. */
+  function triggerEvents() {
+    input.dispatchEvent(new Event("input",  { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  /** Returns true when the field contains all 9 SSN digits (ignoring hyphens). */
+  function hasValue() {
+    return input.value.replace(/-/g, "").length >= 9;
+  }
+
+  input.focus();
+
+  // ── Clear field ───────────────────────────────────────────────────────────
   if (nativeSetter) nativeSetter.call(input, "");
   input.dispatchEvent(new Event("input", { bubbles: true }));
 
-  // ── Strategy 1: execCommand (works for masked inputs in Chrome) ────────
-  if (document.execCommand) {
+  // ── Strategy 1: direct native setter ─────────────────────────────────
+  if (nativeSetter) nativeSetter.call(input, ssn);
+  triggerEvents();
+  if (hasValue()) {
+    input.blur();
+    return;
+  }
+
+  // ── Strategy 2: clipboard paste simulation ──────────────────────────
+  try {
+    // Clear first so the paste replaces rather than appends.
+    if (nativeSetter) nativeSetter.call(input, "");
     input.select();
-    const inserted = document.execCommand("insertText", false, value);
-    if (inserted && input.value === value) {
-      input.dispatchEvent(new Event("change", { bubbles: true }));
+    const dt = new DataTransfer();
+    dt.setData("text/plain", ssn);
+    input.dispatchEvent(
+      new ClipboardEvent("paste", {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true,
+      })
+    );
+    triggerEvents();
+    if (hasValue()) {
       input.blur();
       return;
     }
+  } catch (_) {
+    // DataTransfer / ClipboardEvent not supported in this context — continue.
   }
 
-  // ── Strategy 2: character-by-character InputEvent simulation ──────────
-  for (const char of value) {
-    // keydown
+  // ── Strategy 3: digits-only keystroke simulation ─────────────────────
+  // The masking library receives beforeinput/input events and inserts the
+  // formatted character itself.  We must fire these events BEFORE updating
+  // the native value; only nudge the value ourselves if the mask did not.
+  if (nativeSetter) nativeSetter.call(input, "");
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+
+  const digits = ssn.replace(/-/g, ""); // send only the 9 raw digits
+
+  for (const digit of digits) {
+    const keyCode = 48 + parseInt(digit, 10); // char code for '0'–'9'
+
     input.dispatchEvent(new KeyboardEvent("keydown", {
-      key: char, bubbles: true, cancelable: true,
+      key: digit, code: `Digit${digit}`,
+      keyCode, which: keyCode,
+      bubbles: true, cancelable: true,
     }));
-    // beforeinput
+
+    const beforeLen = input.value.length;
+
+    // Fire beforeinput — masking libraries intercept this and update the value.
     input.dispatchEvent(new InputEvent("beforeinput", {
-      inputType: "insertText", data: char, bubbles: true, cancelable: true,
+      inputType: "insertText",
+      data: digit,
+      bubbles: true,
+      cancelable: true,
     }));
-    // Append the character using the native setter so masking logic applies.
-    if (nativeSetter) nativeSetter.call(input, input.value + char);
-    // input
+
+    // Fire input event (some libraries listen here instead of beforeinput).
     input.dispatchEvent(new InputEvent("input", {
-      inputType: "insertText", data: char, bubbles: true,
+      inputType: "insertText",
+      data: digit,
+      bubbles: true,
     }));
-    // keyup
+
+    // If the masking library did NOT update the value, append the digit ourselves.
+    if (input.value.length === beforeLen && nativeSetter) {
+      nativeSetter.call(input, input.value + digit);
+      input.dispatchEvent(new InputEvent("input", {
+        inputType: "insertText",
+        data: digit,
+        bubbles: true,
+      }));
+    }
+
     input.dispatchEvent(new KeyboardEvent("keyup", {
-      key: char, bubbles: true,
+      key: digit, code: `Digit${digit}`,
+      keyCode, which: keyCode,
+      bubbles: true,
     }));
   }
 
@@ -1101,8 +1188,8 @@ function autofillDomesticDemographics() {
     // ─────────────────────────────────────────────────────────────────────
 
     // Social Security Number
-    // Salesforce SSN fields use input masking — plain value assignment is
-    // ignored.  typeIntoInput() simulates real keystroke events instead.
+    // Uses fillSSNField() which escalates through three strategies to handle
+    // both plain Salesforce text fields and masked input components.
     (() => {
       const keywords = ["social security", "ssn", "social security number"];
       for (const el of document.querySelectorAll("input")) {
@@ -1116,7 +1203,7 @@ function autofillDomesticDemographics() {
           getNearbyText(el),
         ].join(" ");
         if (keywords.some((kw) => fingerprint.includes(normalize(kw)))) {
-          typeIntoInput(el, ssn);
+          fillSSNField(el, ssn);
           console.log(`[Flee Autofill] "Social Security Number" → "${ssn}"`);
           return;
         }
