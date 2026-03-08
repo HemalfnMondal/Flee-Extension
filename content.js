@@ -1018,12 +1018,31 @@ function autofillDomesticDemographics() {
   }
 
   console.log(
-    "[Flee Autofill] Domestic Demographics page detected — starting fill…"
+    "[Flee Autofill] Domestic Demographics page detected — waiting for form…"
   );
 
-  const DELAY = 1000; // ms — let Salesforce finish rendering
+  /**
+   * Polls the DOM every 300 ms until at least 10 input/select elements exist,
+   * then resolves.  This ensures Salesforce has finished rendering the form
+   * before we attempt to fill any fields.
+   * @returns {Promise<void>}
+   */
+  function waitForInputs() {
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        const inputs = document.querySelectorAll("input, select");
+        if (inputs.length > 10) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 300);
+    });
+  }
 
-  setTimeout(() => {
+  (async () => {
+    await waitForInputs();
+    console.log("[Flee Autofill] Form ready — starting fill…");
+
     // ── Generate random data ─────────────────────────────────────────────
     const address = generateUSAddress();
     const city    = generateCity();
@@ -1036,31 +1055,16 @@ function autofillDomesticDemographics() {
     });
 
     // ── Helpers ──────────────────────────────────────────────────────────
-    /**
-     * Fill a dropdown and log the result.
-     * @param {string}   fieldName   Human-readable name for logging.
-     * @param {string[]} keywords    Label/name/id keywords.
-     * @param {string}   optionText  Partial text of the target option.
-     */
-    function fillSelect(fieldName, keywords, optionText) {
+    function fillSelectField(fieldName, keywords, optionText) {
       const ok = tryFillSelect(keywords, optionText);
       if (ok) {
         console.log(`[Flee Autofill] "${fieldName}" → "${optionText}"`);
       } else {
-        console.warn(
-          `[Flee Autofill] Could not fill "${fieldName}" (option: "${optionText}")`
-        );
+        console.warn(`[Flee Autofill] Could not fill "${fieldName}" (option: "${optionText}")`);
       }
     }
 
-    /**
-     * Fill a text input and log the result.
-     * @param {string}   fieldName  Human-readable name for logging.
-     * @param {string[]} keywords   Label/name/id keywords.
-     * @param {string}   value      Value to write.
-     * @param {boolean}  [overwrite]
-     */
-    function fillText(fieldName, keywords, value, overwrite = false) {
+    function fillTextField(fieldName, keywords, value, overwrite = false) {
       const ok = tryFillInput(keywords, value, overwrite);
       if (ok) {
         console.log(`[Flee Autofill] "${fieldName}" → "${value}"`);
@@ -1073,56 +1077,67 @@ function autofillDomesticDemographics() {
     // Address section
     // ─────────────────────────────────────────────────────────────────────
 
-    // Country (address block) — match "country" but NOT citizenship/birth.
-    // tryFillSelect matches the FIRST select whose fingerprint contains any
-    // keyword; we use narrow keywords to hit the address-country dropdown.
-    fillSelect("Country",
+    fillSelectField("Country",
       ["mailing country", "address country", "country of residence", "country"],
       "United States"
     );
 
-    // Address Line 1
-    fillText("Address Line 1",
+    fillTextField("Address Line 1",
       ["address line 1", "address1", "street address", "address line1", "line 1"],
       address
     );
 
     // Address Line 2 — intentionally left empty (skip).
 
-    // City
-    fillText("City", ["city"], city);
+    fillTextField("City", ["city"], city);
 
     // State / Province
-    // Salesforce renders State as a <select> picklist after Country is chosen.
-    // We try the select first, then fall back to a text input (using the native
-    // value setter so Lightning component bindings are notified), and also
-    // search shadow DOM in case the field is inside a lightning-input.
-    const stateFilledAsSelect = tryFillSelect(
-      ["state", "province", "state/province", "state / province"],
-      state  // abbreviation matched against option.value (e.g. value="TX")
-    );
-    if (stateFilledAsSelect) {
-      console.log(`[Flee Autofill] "State/Province" → "${state}"`);
-    } else {
-      // Try plain DOM first, then shadow DOM.
-      const stateInput =
-        findInputDeep(["state", "province", "state/province", "state / province"]);
+    // Salesforce replaces the State text field with a <select> picklist once
+    // Country is chosen.  We scan every select for one labelled "state" /
+    // "province" and loop its options looking for a match on either the
+    // visible text OR the option value (state abbreviation).
+    (() => {
+      const stateKeywords = ["state", "province", "state/province", "state / province"];
+      for (const select of document.querySelectorAll("select")) {
+        const fingerprint = [
+          getLabelText(select),
+          getNearbyText(select),
+          normalize(select.name),
+          normalize(select.id),
+        ].join(" ");
+        if (!stateKeywords.some((kw) => fingerprint.includes(normalize(kw)))) continue;
+
+        for (const option of select.options) {
+          if (
+            normalize(option.textContent).includes(normalize(state)) ||
+            normalize(option.value) === normalize(state)
+          ) {
+            select.value = option.value;
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+            console.log(`[Flee Autofill] "State/Province" → "${state}"`);
+            return;
+          }
+        }
+      }
+      // Fallback: text input (non-Salesforce or shadow DOM)
+      const stateInput = findInputDeep(stateKeywords);
       if (stateInput) {
-        setNativeValue(stateInput, state);
+        stateInput.value = state;
+        stateInput.dispatchEvent(new Event("input",  { bubbles: true }));
+        stateInput.dispatchEvent(new Event("change", { bubbles: true }));
+        stateInput.dispatchEvent(new Event("blur",   { bubbles: true }));
         console.log(`[Flee Autofill] "State/Province" → "${state}"`);
       } else {
         console.warn("[Flee Autofill] Could not fill \"State/Province\"");
       }
-    }
+    })();
 
-    // Zip / Postal Code
-    fillText("Zip Code",
+    fillTextField("Zip Code",
       ["zip", "postal", "zip code", "postal code"],
       zip
     );
 
-    // Is this also your Mailing Address?
-    fillSelect("Is this your Mailing Address?",
+    fillSelectField("Is this your Mailing Address?",
       ["mailing address", "also your mailing", "same as mailing"],
       "Yes"
     );
@@ -1132,52 +1147,44 @@ function autofillDomesticDemographics() {
     // ─────────────────────────────────────────────────────────────────────
 
     // Social Security Number
-    // Runs in its own async block with a 1500 ms delay — Salesforce often
-    // renders this field after other components.  Uses setNativeValue() which
-    // calls the native HTMLInputElement setter so Lightning component bindings
-    // are notified.  findInputDeep() pierces shadow DOM roots so the field is
-    // found even when nested inside a <lightning-input> custom element.
-    (async () => {
-      await new Promise((r) => setTimeout(r, 1500));
-      if (!window.location.href.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) return;
-
+    // Find the input via shadow-DOM-aware search, then set the value and fire
+    // input / change / blur so Salesforce registers it as user-entered.
+    (() => {
       const ssnInput = findInputDeep(["social security", "ssn"]);
       if (ssnInput) {
-        setNativeValue(ssnInput, ssn);
+        ssnInput.value = ssn;
+        ssnInput.dispatchEvent(new Event("input",  { bubbles: true }));
+        ssnInput.dispatchEvent(new Event("change", { bubbles: true }));
+        ssnInput.dispatchEvent(new Event("blur",   { bubbles: true }));
         console.log(`[Flee Autofill] "Social Security Number" → "${ssn}"`);
       } else {
         console.warn("[Flee Autofill] Could not find Social Security Number field.");
       }
     })();
 
-    // Country of Citizenship
-    fillSelect("Country of Citizenship",
+    fillSelectField("Country of Citizenship",
       ["citizenship", "country of citizenship"],
       "United States of America"
     );
 
-    // Date of Birth
-    // Use overwrite=true because date inputs may already contain a placeholder.
-    fillText("Date of Birth",
-      ["date of birth", "dob", "birth date", "birthdate", "date of birth"],
+    fillTextField("Date of Birth",
+      ["date of birth", "dob", "birth date", "birthdate"],
       "09/02/2005",
       true
     );
 
-    // Country of Birth
-    fillSelect("Country of Birth",
+    fillSelectField("Country of Birth",
       ["country of birth", "birth country", "birthcountry"],
       "United States of America"
     );
 
-    // Gender
-    fillSelect("Gender",
+    fillSelectField("Gender",
       ["gender", "sex"],
       "Male/Man"
     );
 
     console.log("[Flee Autofill] Domestic Demographics fill complete.");
-  }, DELAY);
+  })();
 }
 
 // ─────────────────────────────────────────────
