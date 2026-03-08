@@ -454,6 +454,71 @@ async function typeIntoInput(input, text) {
 }
 
 /**
+ * Sets a value on an input using the native HTMLInputElement prototype setter,
+ * then fires input + change events.  This bypasses React / Vue / LWC property
+ * descriptors that would otherwise intercept and ignore a plain assignment.
+ *
+ * @param {HTMLInputElement} element
+ * @param {string}           value
+ */
+function setNativeValue(element, value) {
+  const valueSetter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype, "value"
+  ).set;
+  valueSetter.call(element, value);
+  element.dispatchEvent(new Event("input",  { bubbles: true }));
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+/**
+ * Searches for an <input> element matching any of the given keywords across
+ * the entire document, including inside open and closed Shadow DOM roots
+ * (Salesforce Lightning Web Components render real <input> elements inside
+ * shadow roots that are invisible to document.querySelectorAll).
+ *
+ * Matching tests the same fingerprint used elsewhere:
+ *   resolved label text · placeholder · name · id · nearby parent text
+ *
+ * @param {string[]} keywords   Lowercase substrings to match.
+ * @param {Node}     [root]     Starting root node (defaults to document.body).
+ * @returns {HTMLInputElement|null}
+ */
+function findInputDeep(keywords, root) {
+  root = root || document.body;
+
+  // Walk every element in this root.
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let node;
+
+  while ((node = walker.nextNode())) {
+    // Recurse into shadow roots if present.
+    if (node.shadowRoot) {
+      const found = findInputDeep(keywords, node.shadowRoot);
+      if (found) return found;
+    }
+
+    if (node.tagName !== "INPUT") continue;
+
+    const type = normalize(node.type);
+    if (["submit", "button", "hidden", "checkbox", "radio", "file"].includes(type)) continue;
+
+    const fingerprint = [
+      getLabelText(node),
+      normalize(node.placeholder),
+      normalize(node.name),
+      normalize(node.id),
+      getNearbyText(node),
+    ].join(" ");
+
+    if (keywords.some((kw) => fingerprint.includes(normalize(kw)))) {
+      return node;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Checks a checkbox and fires the appropriate events.
  * @param {HTMLInputElement} checkbox
  */
@@ -1028,20 +1093,26 @@ function autofillDomesticDemographics() {
     fillText("City", ["city"], city);
 
     // State / Province
-    // On Salesforce, State becomes a <select> picklist once Country is set.
-    // Try select first (matching by option text OR value/abbreviation),
-    // then fall back to a text input for non-Salesforce renderings.
+    // Salesforce renders State as a <select> picklist after Country is chosen.
+    // We try the select first, then fall back to a text input (using the native
+    // value setter so Lightning component bindings are notified), and also
+    // search shadow DOM in case the field is inside a lightning-input.
     const stateFilledAsSelect = tryFillSelect(
       ["state", "province", "state/province", "state / province"],
-      state  // abbreviation is matched against option.value (e.g. value="TX")
+      state  // abbreviation matched against option.value (e.g. value="TX")
     );
-    if (!stateFilledAsSelect) {
-      fillText("State/Province",
-        ["state", "province", "state/province", "state / province"],
-        state
-      );
-    } else {
+    if (stateFilledAsSelect) {
       console.log(`[Flee Autofill] "State/Province" → "${state}"`);
+    } else {
+      // Try plain DOM first, then shadow DOM.
+      const stateInput =
+        findInputDeep(["state", "province", "state/province", "state / province"]);
+      if (stateInput) {
+        setNativeValue(stateInput, state);
+        console.log(`[Flee Autofill] "State/Province" → "${state}"`);
+      } else {
+        console.warn("[Flee Autofill] Could not fill \"State/Province\"");
+      }
     }
 
     // Zip / Postal Code
@@ -1061,34 +1132,22 @@ function autofillDomesticDemographics() {
     // ─────────────────────────────────────────────────────────────────────
 
     // Social Security Number
-    // Runs in its own async block with a 1500 ms delay because Salesforce
-    // may render this field after other fields.  Uses typeIntoInput() which
-    // simulates keystroke-by-keystroke typing so the input mask processes each
-    // character correctly and formats the value as XXX-XX-XXXX.
+    // Runs in its own async block with a 1500 ms delay — Salesforce often
+    // renders this field after other components.  Uses setNativeValue() which
+    // calls the native HTMLInputElement setter so Lightning component bindings
+    // are notified.  findInputDeep() pierces shadow DOM roots so the field is
+    // found even when nested inside a <lightning-input> custom element.
     (async () => {
       await new Promise((r) => setTimeout(r, 1500));
       if (!window.location.href.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) return;
 
-      const keywords = ["social security", "ssn"];
-      for (const el of document.querySelectorAll("input")) {
-        const type = normalize(el.type);
-        if (["submit", "button", "hidden", "checkbox", "radio", "file"].includes(type)) continue;
-
-        const fingerprint = [
-          getLabelText(el),
-          normalize(el.placeholder),
-          normalize(el.name),
-          normalize(el.id),
-          getNearbyText(el),
-        ].join(" ");
-
-        if (keywords.some((kw) => fingerprint.includes(normalize(kw)))) {
-          await typeIntoInput(el, ssn);
-          console.log(`[Flee Autofill] "Social Security Number" → "${ssn}"`);
-          return;
-        }
+      const ssnInput = findInputDeep(["social security", "ssn"]);
+      if (ssnInput) {
+        setNativeValue(ssnInput, ssn);
+        console.log(`[Flee Autofill] "Social Security Number" → "${ssn}"`);
+      } else {
+        console.warn("[Flee Autofill] Could not find Social Security Number field.");
       }
-      console.warn("[Flee Autofill] Could not find Social Security Number field.");
     })();
 
     // Country of Citizenship
