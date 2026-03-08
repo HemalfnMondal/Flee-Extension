@@ -420,154 +420,37 @@ function tryFillSelect(labelKeywords, optionText) {
 }
 
 /**
- * Simulates character-by-character keyboard input into a field.
+ * Simulates a real user typing text into an input field, character by character.
  *
- * Plain value assignment (input.value = ...) is silently ignored by Salesforce
- * masked / formatted inputs (e.g. SSN, phone).  This function mimics what a
- * real user would do — focusing the field, clearing it, then "typing" every
- * character one at a time — which the masking layer does respond to.
+ * This is necessary for Salesforce masked inputs (e.g. SSN) that ignore
+ * programmatic `input.value = ...` assignment and only react to keyboard events.
  *
- * Strategy (most-to-least compatible):
- *   1. Focus + select-all + execCommand('insertText') — works in most Chromium
- *      based browsers for masked inputs.
- *   2. Character-by-character InputEvent simulation as a reliable fallback.
- *   3. Final guard: native setter + events in case neither path worked.
+ * For each character the function:
+ *   1. Appends the character to `input.value`
+ *   2. Fires `input` + `keydown` + `keyup` events
+ *   3. Waits 40 ms to mimic human typing speed
+ * Then fires a final `change` event when done.
  *
- * @param {HTMLInputElement} input
- * @param {string}           value
+ * @param {HTMLInputElement} input  The target input element.
+ * @param {string}           text   The full string to type in.
+ * @returns {Promise<void>}
  */
-/**
- * Fills a Salesforce SSN (or any masked text) input reliably.
- *
- * Salesforce masked inputs ignore plain `input.value = ...` assignment because
- * the masking layer monitors keyboard / clipboard events, not the raw property.
- * This function escalates through three strategies until the field has a value:
- *
- *  Strategy 1 — Direct native setter + events
- *    Works when Salesforce renders SSN as a plain, unmasked text field.
- *
- *  Strategy 2 — Clipboard paste simulation
- *    Many masked inputs have a dedicated `paste` event handler that accepts
- *    plain text and applies formatting.  We create a real DataTransfer object
- *    and fire a ClipboardEvent with it.
- *
- *  Strategy 3 — Digits-only character typing
- *    The masking library listens to `beforeinput` / `input` events fired
- *    BEFORE the DOM value is modified.  We fire those events first, then nudge
- *    the native value by one character if the mask did not do so itself.
- *    We send only the 9 raw digits (no hyphens) because the mask inserts
- *    the hyphens itself to produce "XXX-XX-XXXX".
- *
- * @param {HTMLInputElement} input  The SSN input element.
- * @param {string}           ssn    Formatted SSN string, e.g. "384-52-9184".
- */
-function fillSSNField(input, ssn) {
-  const nativeSetter = Object.getOwnPropertyDescriptor(
-    HTMLInputElement.prototype, "value"
-  )?.set;
-
-  /** Fire input+change so any framework listener sees the new value. */
-  function triggerEvents() {
-    input.dispatchEvent(new Event("input",  { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  /** Returns true when the field contains all 9 SSN digits (ignoring hyphens). */
-  function hasValue() {
-    return input.value.replace(/-/g, "").length >= 9;
-  }
-
+async function typeIntoInput(input, text) {
   input.focus();
+  input.value = "";
 
-  // ── Clear field ───────────────────────────────────────────────────────────
-  if (nativeSetter) nativeSetter.call(input, "");
-  input.dispatchEvent(new Event("input", { bubbles: true }));
+  for (const char of text) {
+    input.value += char;
 
-  // ── Strategy 1: direct native setter ─────────────────────────────────
-  if (nativeSetter) nativeSetter.call(input, ssn);
-  triggerEvents();
-  if (hasValue()) {
-    input.blur();
-    return;
-  }
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+    input.dispatchEvent(new KeyboardEvent("keyup",   { bubbles: true }));
 
-  // ── Strategy 2: clipboard paste simulation ──────────────────────────
-  try {
-    // Clear first so the paste replaces rather than appends.
-    if (nativeSetter) nativeSetter.call(input, "");
-    input.select();
-    const dt = new DataTransfer();
-    dt.setData("text/plain", ssn);
-    input.dispatchEvent(
-      new ClipboardEvent("paste", {
-        clipboardData: dt,
-        bubbles: true,
-        cancelable: true,
-      })
-    );
-    triggerEvents();
-    if (hasValue()) {
-      input.blur();
-      return;
-    }
-  } catch (_) {
-    // DataTransfer / ClipboardEvent not supported in this context — continue.
-  }
-
-  // ── Strategy 3: digits-only keystroke simulation ─────────────────────
-  // The masking library receives beforeinput/input events and inserts the
-  // formatted character itself.  We must fire these events BEFORE updating
-  // the native value; only nudge the value ourselves if the mask did not.
-  if (nativeSetter) nativeSetter.call(input, "");
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-
-  const digits = ssn.replace(/-/g, ""); // send only the 9 raw digits
-
-  for (const digit of digits) {
-    const keyCode = 48 + parseInt(digit, 10); // char code for '0'–'9'
-
-    input.dispatchEvent(new KeyboardEvent("keydown", {
-      key: digit, code: `Digit${digit}`,
-      keyCode, which: keyCode,
-      bubbles: true, cancelable: true,
-    }));
-
-    const beforeLen = input.value.length;
-
-    // Fire beforeinput — masking libraries intercept this and update the value.
-    input.dispatchEvent(new InputEvent("beforeinput", {
-      inputType: "insertText",
-      data: digit,
-      bubbles: true,
-      cancelable: true,
-    }));
-
-    // Fire input event (some libraries listen here instead of beforeinput).
-    input.dispatchEvent(new InputEvent("input", {
-      inputType: "insertText",
-      data: digit,
-      bubbles: true,
-    }));
-
-    // If the masking library did NOT update the value, append the digit ourselves.
-    if (input.value.length === beforeLen && nativeSetter) {
-      nativeSetter.call(input, input.value + digit);
-      input.dispatchEvent(new InputEvent("input", {
-        inputType: "insertText",
-        data: digit,
-        bubbles: true,
-      }));
-    }
-
-    input.dispatchEvent(new KeyboardEvent("keyup", {
-      key: digit, code: `Digit${digit}`,
-      keyCode, which: keyCode,
-      bubbles: true,
-    }));
+    // Small delay between keystrokes so the masking library can process each one.
+    await new Promise((r) => setTimeout(r, 40));
   }
 
   input.dispatchEvent(new Event("change", { bubbles: true }));
-  input.blur();
 }
 
 /**
@@ -1178,10 +1061,12 @@ function autofillDomesticDemographics() {
     // ─────────────────────────────────────────────────────────────────────
 
     // Social Security Number
-    // Runs in its own delayed block (1200 ms) because Salesforce often renders
-    // this field after other fields.  Simulates focus → value → input/change/blur
-    // so the form detects the update correctly.
-    setTimeout(() => {
+    // Runs in its own async block with a 1500 ms delay because Salesforce
+    // may render this field after other fields.  Uses typeIntoInput() which
+    // simulates keystroke-by-keystroke typing so the input mask processes each
+    // character correctly and formats the value as XXX-XX-XXXX.
+    (async () => {
+      await new Promise((r) => setTimeout(r, 1500));
       if (!window.location.href.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) return;
 
       const keywords = ["social security", "ssn"];
@@ -1198,17 +1083,13 @@ function autofillDomesticDemographics() {
         ].join(" ");
 
         if (keywords.some((kw) => fingerprint.includes(normalize(kw)))) {
-          el.focus();
-          el.value = ssn;
-          el.dispatchEvent(new Event("input",  { bubbles: true }));
-          el.dispatchEvent(new Event("change", { bubbles: true }));
-          el.dispatchEvent(new Event("blur",   { bubbles: true }));
+          await typeIntoInput(el, ssn);
           console.log(`[Flee Autofill] "Social Security Number" → "${ssn}"`);
           return;
         }
       }
       console.warn("[Flee Autofill] Could not find Social Security Number field.");
-    }, 1200);
+    })();
 
     // Country of Citizenship
     fillSelect("Country of Citizenship",
