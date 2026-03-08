@@ -167,26 +167,124 @@ function fillInput(input, value) {
 }
 
 /**
- * Selects an option inside a <select> element whose text content or value
- * includes the given search string.
+ * Selects an option inside a <select> element by iterating every option and
+ * matching against its visible textContent (most reliable on Salesforce pages).
+ * Falls back to matching the option value attribute.
+ *
  * @param {HTMLSelectElement} select
  * @param {string} searchText  Partial, case-insensitive match target.
  * @returns {boolean} Whether a matching option was found and selected.
  */
 function selectOption(select, searchText) {
   const target = normalize(searchText);
-  const match = Array.from(select.options).find(
-    (opt) =>
-      normalize(opt.text).includes(target) ||
-      normalize(opt.value).includes(target)
-  );
 
-  if (match) {
-    select.value = match.value;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
-    return true;
+  for (const option of select.options) {
+    const text  = normalize(option.textContent);
+    const value = normalize(option.value);
+
+    if (text.includes(target) || value.includes(target)) {
+      select.value = option.value;
+      // Salesforce requires both a "change" and an "input" event to update
+      // its internal Lightning / Aura component state.
+      select.dispatchEvent(new Event("input",  { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }
   }
   return false;
+}
+
+/**
+ * Dedicated handler for the "Choose a Location" dropdown.
+ *
+ * Strategy:
+ *  1. Wait INITIAL_DELAY ms (Salesforce often renders the dropdown after the
+ *     initial page load, so an immediate query usually returns 0 options).
+ *  2. Attempt to find and fill the dropdown.
+ *  3. If the dropdown or the required option is not yet present, install a
+ *     MutationObserver to re-try on every DOM mutation until success or
+ *     MAX_WAIT_MS has elapsed.
+ *
+ * @returns {Promise<void>} Resolves when the dropdown is filled or timed out.
+ */
+function fillLocationDropdown() {
+  return new Promise((resolve) => {
+    /** Total time (ms) to wait for the dropdown before giving up. */
+    const MAX_WAIT_MS   = 8000;
+    /** Initial pause before the first attempt — gives Salesforce time to render. */
+    const INITIAL_DELAY = 1000;
+
+    /**
+     * Scans all <select> elements on the page, finds the one associated with
+     * "Choose a Location", then iterates its options looking for "Campus Center".
+     * @returns {boolean} true if the option was found and selected.
+     */
+    function tryFill() {
+      const selects = document.querySelectorAll("select");
+
+      for (const select of selects) {
+        const label = getLabelText(select);
+
+        // Only consider selects that look like the location dropdown.
+        if (!isLocationSelect(select, label)) continue;
+
+        // Iterate every option and match by visible text.
+        for (const option of select.options) {
+          if (normalize(option.textContent).includes("campus center")) {
+            select.value = option.value;
+            select.dispatchEvent(new Event("input",  { bubbles: true }));
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+            console.log(
+              `[Flee Autofill] Location set → "${option.textContent.trim()}"`
+            );
+            return true;
+          }
+        }
+
+        // The <select> exists but "Campus Center" isn't loaded yet.
+        console.log(
+          "[Flee Autofill] Location <select> found but 'Campus Center' option " +
+          "not yet rendered — will retry…"
+        );
+      }
+      return false;
+    }
+
+    // ── Step 1: initial delay ──────────────────────────────────────────────
+    setTimeout(() => {
+      if (tryFill()) {
+        resolve();
+        return;
+      }
+
+      // ── Step 2: MutationObserver fallback ───────────────────────────────
+      console.log(
+        "[Flee Autofill] Location dropdown not ready — watching DOM for changes…"
+      );
+
+      const deadline = Date.now() + (MAX_WAIT_MS - INITIAL_DELAY);
+
+      const observer = new MutationObserver(() => {
+        // Bail out if we have exceeded the maximum wait time.
+        if (Date.now() > deadline) {
+          observer.disconnect();
+          console.error(
+            "[Flee Autofill] Timed out waiting for 'Campus Center' option."
+          );
+          resolve();
+          return;
+        }
+
+        if (tryFill()) {
+          observer.disconnect();
+          resolve();
+        }
+      });
+
+      // Watch the entire document body for any child or subtree additions.
+      observer.observe(document.body, { childList: true, subtree: true });
+    }, INITIAL_DELAY);
+  });
 }
 
 /**
@@ -415,16 +513,10 @@ function autofill() {
     }
 
     // ── <select> elements ──────────────────────
+    // The location dropdown is handled separately by fillLocationDropdown()
+    // (with its own delay + MutationObserver retry) — skip it here.
     if (tag === "select") {
-      if (isLocationSelect(el, label)) {
-        const success = selectOption(el, "campus center");
-        if (success) {
-          console.log("[Flee Autofill] Location set to 'Campus Center'.");
-        } else {
-          console.warn("[Flee Autofill] Could not find 'Campus Center' option in location dropdown.");
-        }
-      }
-      return; // No further processing for selects.
+      return;
     }
 
     // ── Checkbox elements ──────────────────────
@@ -477,7 +569,14 @@ function autofill() {
     }
   });
 
-  console.log("[Flee Autofill] Autofill complete.");
+  // ── Location dropdown (delayed + MutationObserver) ────────────────────
+  // Fired as a fire-and-forget Promise so the rest of the autofill completes
+  // immediately while the dropdown waits for Salesforce to render its options.
+  fillLocationDropdown().then(() => {
+    console.log("[Flee Autofill] Location dropdown routine finished.");
+  });
+
+  console.log("[Flee Autofill] Autofill complete (dropdown fill running in background).");
 }
 
 // ─────────────────────────────────────────────
@@ -486,12 +585,13 @@ function autofill() {
 
 /**
  * The background service worker sends { action: "runAutofill" } when
- * the user clicks the extension icon. We respond synchronously.
+ * the user clicks the extension icon.
+ * autofill() is synchronous; fillLocationDropdown() runs as a background
+ * Promise, so we can respond to the caller immediately.
  */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.action === "runAutofill") {
-    autofill();
+    autofill();            // sync fields filled immediately
     sendResponse({ success: true });
   }
-  // Return true only when using async sendResponse; not needed here.
 });
