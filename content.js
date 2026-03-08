@@ -27,6 +27,12 @@ const FIXED_PASSWORD = "Neela63352..";
  */
 const MY_PROFILE_URL_FRAGMENT = "pageId=My_Profile";
 
+/**
+ * URL fragment that identifies the Domestic Demographics page.
+ * Matched with String.prototype.includes().
+ */
+const DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT = "pageId=Domestic_Demographics";
+
 // ─────────────────────────────────────────────
 // Random data generators
 // ─────────────────────────────────────────────
@@ -82,6 +88,85 @@ function generatePhone() {
   const min = 100_000_000; // 9 digits starting at 1
   const max = 999_999_999;
   return String(Math.floor(Math.random() * (max - min + 1)) + min);
+}
+
+/**
+ * Returns a random realistic US street address.
+ * Format: "<number> <street name> <suffix>"
+ * Example: "4821 Maple St"
+ * @returns {string}
+ */
+function generateUSAddress() {
+  const number    = Math.floor(Math.random() * 9900) + 100; // 100–9999
+  const streets   = [
+    "Maple", "Oak", "Pine", "Elm", "Cedar", "Birch", "Walnut",
+    "Willow", "Ash", "Cherry", "Spruce", "Hickory", "Sycamore",
+    "Poplar", "Chestnut", "Magnolia", "Linden", "Dogwood",
+  ];
+  const suffixes  = ["St", "Ave", "Dr", "Blvd", "Ln", "Rd", "Way", "Ct"];
+  const street    = streets[Math.floor(Math.random() * streets.length)];
+  const suffix    = suffixes[Math.floor(Math.random() * suffixes.length)];
+  return `${number} ${street} ${suffix}`;
+}
+
+/**
+ * Returns a random US city name.
+ * @returns {string}
+ */
+function generateCity() {
+  const cities = [
+    "Springfield", "Franklin", "Georgetown", "Greenville", "Madison",
+    "Fairview", "Bristol", "Clinton", "Salem", "Arlington",
+    "Burlington", "Centerville", "Dayton", "Milford", "Oakland",
+    "Newport", "Hudson", "Riverside", "Florence", "Lexington",
+  ];
+  return cities[Math.floor(Math.random() * cities.length)];
+}
+
+/**
+ * Returns a random US state abbreviation.
+ * @returns {string}
+ */
+function generateState() {
+  const states = [
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA",
+    "HI", "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD",
+    "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC",
+    "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV", "WI", "WY",
+  ];
+  return states[Math.floor(Math.random() * states.length)];
+}
+
+/**
+ * Returns a random 5-digit US ZIP code string (zero-padded).
+ * @returns {string}
+ */
+function generateZip() {
+  // Range 10000–99999 gives realistic-looking 5-digit ZIPs.
+  return String(Math.floor(Math.random() * 90000) + 10000);
+}
+
+/**
+ * Returns a random Social Security Number in the format XXX-XX-XXXX.
+ * Note: area numbers 000 and 666 are avoided; group/serial numbers avoid 0000/00.
+ * @returns {string}
+ */
+function generateSSN() {
+  // Area: 001–899, excluding 666
+  let area;
+  do {
+    area = Math.floor(Math.random() * 899) + 1;
+  } while (area === 666);
+
+  const group  = Math.floor(Math.random() * 99) + 1;  // 01–99
+  const serial = Math.floor(Math.random() * 9999) + 1; // 0001–9999
+
+  return [
+    String(area).padStart(3, "0"),
+    String(group).padStart(2, "0"),
+    String(serial).padStart(4, "0"),
+  ].join("-");
 }
 
 // ─────────────────────────────────────────────
@@ -771,6 +856,208 @@ function autofillMyProfile() {
   }, INITIAL_DELAY);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Domestic Demographics page autofill  (pageId=Domestic_Demographics)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Fills a plain text / date input by label, placeholder, name, or id.
+ *
+ * Builds a normalised fingerprint for each <input> or <textarea> on the page
+ * and checks whether any of the provided keywords appear in it.
+ * Skips the field if it already has a value.
+ *
+ * @param {string[]} keywords    Lowercase substrings to test against.
+ * @param {string}   value       Value to write.
+ * @param {boolean}  [overwrite] If true, fill even when a value already exists.
+ * @returns {boolean} true when a matching field was found and filled.
+ */
+function tryFillInput(keywords, value, overwrite = false) {
+  for (const el of document.querySelectorAll("input, textarea")) {
+    // Skip non-visible / submit / button / hidden / checkbox / radio inputs.
+    const type = normalize(el.type);
+    if (["submit", "button", "hidden", "checkbox", "radio", "file"].includes(type)) continue;
+
+    // Skip already-filled fields unless the caller requests an overwrite.
+    if (!overwrite && el.value && el.value.trim() !== "") continue;
+
+    const fingerprint = [
+      getLabelText(el),
+      normalize(el.placeholder),
+      normalize(el.name),
+      normalize(el.id),
+      getNearbyText(el),
+    ].join(" ");
+
+    if (keywords.some((kw) => fingerprint.includes(normalize(kw)))) {
+      fillInput(el, value);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Autofills the Domestic Demographics form.
+ *
+ * Fields filled (and only these):
+ *   - Country (address)           → "United States"
+ *   - Address Line 1              → generateUSAddress()
+ *   - Address Line 2              → left empty
+ *   - City                        → generateCity()
+ *   - State / Province            → generateState()
+ *   - Zip Code                    → generateZip()
+ *   - Is this your mailing addr?  → "Yes"
+ *   - Social Security Number      → generateSSN()
+ *   - Country of Citizenship      → "United States of America"
+ *   - Date of Birth               → "09/02/2005"
+ *   - Country of Birth            → "United States of America"
+ *   - Gender                      → "Male/Man"
+ */
+function autofillDomesticDemographics() {
+  // ── URL guard ────────────────────────────────────────────────────────────
+  if (!window.location.href.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) {
+    console.warn(
+      "[Flee Autofill] URL does not include '" +
+        DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT +
+        "'. Domestic Demographics autofill skipped."
+    );
+    return;
+  }
+
+  console.log(
+    "[Flee Autofill] Domestic Demographics page detected — starting fill…"
+  );
+
+  const DELAY = 1000; // ms — let Salesforce finish rendering
+
+  setTimeout(() => {
+    // ── Generate random data ─────────────────────────────────────────────
+    const address = generateUSAddress();
+    const city    = generateCity();
+    const state   = generateState();
+    const zip     = generateZip();
+    const ssn     = generateSSN();
+
+    console.log("[Flee Autofill] Domestic Demographics data:", {
+      address, city, state, zip, ssn,
+    });
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+    /**
+     * Fill a dropdown and log the result.
+     * @param {string}   fieldName   Human-readable name for logging.
+     * @param {string[]} keywords    Label/name/id keywords.
+     * @param {string}   optionText  Partial text of the target option.
+     */
+    function fillSelect(fieldName, keywords, optionText) {
+      const ok = tryFillSelect(keywords, optionText);
+      if (ok) {
+        console.log(`[Flee Autofill] "${fieldName}" → "${optionText}"`);
+      } else {
+        console.warn(
+          `[Flee Autofill] Could not fill "${fieldName}" (option: "${optionText}")`
+        );
+      }
+    }
+
+    /**
+     * Fill a text input and log the result.
+     * @param {string}   fieldName  Human-readable name for logging.
+     * @param {string[]} keywords   Label/name/id keywords.
+     * @param {string}   value      Value to write.
+     * @param {boolean}  [overwrite]
+     */
+    function fillText(fieldName, keywords, value, overwrite = false) {
+      const ok = tryFillInput(keywords, value, overwrite);
+      if (ok) {
+        console.log(`[Flee Autofill] "${fieldName}" → "${value}"`);
+      } else {
+        console.warn(`[Flee Autofill] Could not fill "${fieldName}"`);
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Address section
+    // ─────────────────────────────────────────────────────────────────────
+
+    // Country (address block) — match "country" but NOT citizenship/birth.
+    // tryFillSelect matches the FIRST select whose fingerprint contains any
+    // keyword; we use narrow keywords to hit the address-country dropdown.
+    fillSelect("Country",
+      ["mailing country", "address country", "country of residence", "country"],
+      "United States"
+    );
+
+    // Address Line 1
+    fillText("Address Line 1",
+      ["address line 1", "address1", "street address", "address line1", "line 1"],
+      address
+    );
+
+    // Address Line 2 — intentionally left empty (skip).
+
+    // City
+    fillText("City", ["city"], city);
+
+    // State / Province
+    fillText("State/Province",
+      ["state", "province", "state/province", "state / province"],
+      state
+    );
+
+    // Zip / Postal Code
+    fillText("Zip Code",
+      ["zip", "postal", "zip code", "postal code"],
+      zip
+    );
+
+    // Is this also your Mailing Address?
+    fillSelect("Is this your Mailing Address?",
+      ["mailing address", "also your mailing", "same as mailing"],
+      "Yes"
+    );
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Personal Information section
+    // ─────────────────────────────────────────────────────────────────────
+
+    // Social Security Number
+    fillText("Social Security Number",
+      ["social security", "ssn", "social security number"],
+      ssn
+    );
+
+    // Country of Citizenship
+    fillSelect("Country of Citizenship",
+      ["citizenship", "country of citizenship"],
+      "United States of America"
+    );
+
+    // Date of Birth
+    // Use overwrite=true because date inputs may already contain a placeholder.
+    fillText("Date of Birth",
+      ["date of birth", "dob", "birth date", "birthdate", "date of birth"],
+      "09/02/2005",
+      true
+    );
+
+    // Country of Birth
+    fillSelect("Country of Birth",
+      ["country of birth", "birth country", "birthcountry"],
+      "United States of America"
+    );
+
+    // Gender
+    fillSelect("Gender",
+      ["gender", "sex"],
+      "Male/Man"
+    );
+
+    console.log("[Flee Autofill] Domestic Demographics fill complete.");
+  }, DELAY);
+}
+
 // ─────────────────────────────────────────────
 // Message listener (triggered by icon click)
 // ─────────────────────────────────────────────
@@ -778,21 +1065,20 @@ function autofillMyProfile() {
 /**
  * Routes to the correct autofill routine based on the current page URL.
  *
- * - pageId=My_Profile  → autofillMyProfile() — fills only the 7 dropdowns
- * - pageId=Registration → autofill()          — fills the User Details form
- *
- * autofill() is synchronous (location dropdown runs as a background Promise),
- * while autofillMyProfile() is entirely async, so sendResponse is always
- * called immediately.
+ * - pageId=Domestic_Demographics → autofillDomesticDemographics()
+ * - pageId=My_Profile            → autofillMyProfile()
+ * - pageId=Registration          → autofill()
  */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.action === "runAutofill") {
     const url = window.location.href;
 
-    if (url.includes(MY_PROFILE_URL_FRAGMENT)) {
-      autofillMyProfile();    // async — My Profile dropdowns
+    if (url.includes(DOMESTIC_DEMOGRAPHICS_URL_FRAGMENT)) {
+      autofillDomesticDemographics(); // async — Demographics form
+    } else if (url.includes(MY_PROFILE_URL_FRAGMENT)) {
+      autofillMyProfile();            // async — My Profile dropdowns
     } else {
-      autofill();             // sync — Registration form fields
+      autofill();                     // sync  — Registration form fields
     }
 
     sendResponse({ success: true });
