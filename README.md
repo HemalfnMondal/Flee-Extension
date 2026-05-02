@@ -72,8 +72,8 @@ https://parkuniversity.my.site.com/ApplicationPortal/apex/ERx_Forms__PageMaker?p
 | Last Name | Random realistic last name (e.g. Smith, Taylor, Brown) |
 | Email | Random 3–5 digit number + `@hemalmondalphilosophy.me` |
 | Cell Phone | Random 9-digit number |
-| Create Password | `Neela63352..` |
-| Password Confirm | `Neela63352..` |
+| Create Password | `********` |
+| Password Confirm | `********` |
 | Choose a Location | `Campus Center` |
 | Current High School Student | Checkbox checked |
 
